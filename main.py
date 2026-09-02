@@ -466,8 +466,18 @@ async def admin_panel():
                 max-width: 450px;
                 width: 100%;
             }
-            h1 { text-align: center; color: #333; font-size: 28px; margin-bottom: 5px; }
-            .subtitle { text-align: center; color: #888; margin-bottom: 30px; font-size: 14px; }
+            h1 {
+                text-align: center;
+                color: #333;
+                font-size: 28px;
+                margin-bottom: 5px;
+            }
+            .subtitle {
+                text-align: center;
+                color: #888;
+                margin-bottom: 30px;
+                font-size: 14px;
+            }
             .status-box {
                 background: #f8f9fa;
                 padding: 15px;
@@ -484,8 +494,15 @@ async def admin_panel():
             }
             .online { background: #d4edda; color: #155724; }
             .offline { background: #f8d7da; color: #721c24; }
-            .form-group { margin-bottom: 20px; }
-            label { display: block; margin-bottom: 8px; color: #555; font-weight: 600; }
+            .form-group {
+                margin-bottom: 20px;
+            }
+            label {
+                display: block;
+                margin-bottom: 8px;
+                color: #555;
+                font-weight: 600;
+            }
             input {
                 width: 100%;
                 padding: 12px 15px;
@@ -494,7 +511,10 @@ async def admin_panel():
                 font-size: 16px;
                 transition: border-color 0.3s;
             }
-            input:focus { outline: none; border-color: #667eea; }
+            input:focus {
+                outline: none;
+                border-color: #667eea;
+            }
             button {
                 width: 100%;
                 padding: 14px;
@@ -508,17 +528,43 @@ async def admin_panel():
                 transition: transform 0.2s;
             }
             button:hover { transform: scale(1.02); }
-            button:disabled { opacity: 0.6; cursor: not-allowed; }
-            .btn-danger { background: #dc3545; }
+            button:active { transform: scale(0.98); }
+            button:disabled {
+                opacity: 0.6;
+                cursor: not-allowed;
+            }
+            .btn-danger {
+                background: #dc3545;
+            }
             .btn-danger:hover { background: #c82333; }
+            .btn-success {
+                background: #28a745;
+            }
+            .btn-success:hover { background: #218838; }
             .message {
                 padding: 12px;
                 border-radius: 8px;
                 margin-bottom: 15px;
                 display: none;
             }
-            .success { background: #d4edda; color: #155724; display: block; }
-            .error { background: #f8d7da; color: #721c24; display: block; }
+            .success { 
+                background: #d4edda; 
+                color: #155724; 
+                display: block; 
+            }
+            .error { 
+                background: #f8d7da; 
+                color: #721c24; 
+                display: block; 
+            }
+            .info {
+                background: #d1ecf1;
+                color: #0c5460;
+                padding: 12px;
+                border-radius: 8px;
+                margin-bottom: 15px;
+                display: none;
+            }
             .step {
                 background: #f0f0ff;
                 padding: 15px;
@@ -526,25 +572,34 @@ async def admin_panel():
                 margin-bottom: 15px;
                 border-left: 4px solid #667eea;
             }
-            .step-title { font-weight: 600; color: #333; margin-bottom: 5px; }
-            .step-desc { color: #666; font-size: 14px; }
-            #otpSection, #passwordSection { display: none; }
-            .footer { text-align: center; margin-top: 20px; font-size: 13px; color: #aaa; }
-            .footer a { color: #667eea; text-decoration: none; }
+            .step-title {
+                font-weight: 600;
+                color: #333;
+                margin-bottom: 5px;
+            }
+            .step-desc {
+                color: #666;
+                font-size: 14px;
+            }
+            #otpSection, #passwordSection {
+                display: none;
+            }
+            .footer {
+                text-align: center;
+                margin-top: 20px;
+                font-size: 13px;
+                color: #aaa;
+            }
+            .footer a {
+                color: #667eea;
+                text-decoration: none;
+            }
             .phone-display {
                 background: #e9ecef;
                 padding: 8px 12px;
                 border-radius: 6px;
                 font-family: monospace;
                 font-size: 14px;
-            }
-            .active-requests {
-                margin-top: 15px;
-                padding: 10px;
-                background: #f8f9fa;
-                border-radius: 8px;
-                font-size: 13px;
-                color: #666;
             }
         </style>
     </head>
@@ -560,7 +615,9 @@ async def admin_panel():
             </div>
             
             <div id="message" class="message"></div>
+            <div id="infoBox" class="info"></div>
             
+            <!-- Login Section -->
             <div id="loginSection">
                 <div class="step">
                     <div class="step-title">📱 Login to Telegram</div>
@@ -575,6 +632,7 @@ async def admin_panel():
                 <button id="sendOtpBtn" onclick="sendOTP()">📨 Send OTP</button>
             </div>
             
+            <!-- OTP Section -->
             <div id="otpSection">
                 <div class="step">
                     <div class="step-title">🔑 Enter OTP</div>
@@ -591,6 +649,7 @@ async def admin_panel():
                 <button onclick="resendOTP()" style="background: #6c757d;">🔄 Resend OTP</button>
             </div>
             
+            <!-- Password Section (if 2FA enabled) -->
             <div id="passwordSection">
                 <div class="step">
                     <div class="step-title">🔐 2FA Password Required</div>
@@ -605,11 +664,9 @@ async def admin_panel():
                 <button onclick="verifyPassword()">🔓 Verify Password</button>
             </div>
             
+            <!-- Userbot Controls -->
             <div id="userbotControls" style="display:none; margin-top:20px;">
                 <button onclick="logoutUserbot()" class="btn-danger">🚪 Logout</button>
-                <div class="active-requests">
-                    <strong>🔄 Active Requests:</strong> <span id="activeCount">0</span>
-                </div>
             </div>
             
             <div style="margin-top: 20px; padding: 15px; background: #f8f9fa; border-radius: 10px;">
@@ -625,7 +682,7 @@ async def admin_panel():
             </div>
             
             <div class="footer">
-                <p>Powered by Semy Bypass API v2.0</p>
+                <p>Powered by Semy Bypass API v1.0</p>
             </div>
         </div>
         
@@ -633,9 +690,9 @@ async def admin_panel():
             let loginSessionId = null;
             let currentPhone = null;
             
+            // Check status on load
             window.onload = function() {
                 checkStatus();
-                setInterval(checkStatus, 10000);
             };
             
             async function checkStatus() {
@@ -645,7 +702,6 @@ async def admin_panel():
                     
                     const badge = document.getElementById('statusBadge');
                     const phoneDisplay = document.getElementById('phoneDisplay');
-                    const activeCount = document.getElementById('activeCount');
                     
                     if (data.connected) {
                         badge.className = 'status-badge online';
@@ -664,10 +720,6 @@ async def admin_panel():
                         document.getElementById('userbotControls').style.display = 'none';
                         document.getElementById('otpSection').style.display = 'none';
                         document.getElementById('passwordSection').style.display = 'none';
-                    }
-                    
-                    if (data.active_requests !== undefined) {
-                        activeCount.textContent = data.active_requests;
                     }
                 } catch (error) {
                     console.error('Error checking status');
@@ -849,9 +901,11 @@ async def admin_panel():
             
             function showMessage(msg, type) {
                 const div = document.getElementById('message');
+                const info = document.getElementById('infoBox');
                 div.textContent = msg;
                 div.className = 'message ' + type;
                 div.style.display = 'block';
+                info.style.display = 'none';
                 setTimeout(() => {
                     div.style.display = 'none';
                 }, 6000);
@@ -859,6 +913,7 @@ async def admin_panel():
             
             function hideMessages() {
                 document.getElementById('message').style.display = 'none';
+                document.getElementById('infoBox').style.display = 'none';
             }
             
             // Enter key support
@@ -877,8 +932,9 @@ async def admin_panel():
     """
     return html
 
-# --- Admin API Endpoints ---
+# --- Admin Login Endpoints ---
 
+# Store login clients
 login_clients = {}
 
 @app.post("/admin/login/send-otp")
