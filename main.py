@@ -12,12 +12,17 @@ from contextlib import asynccontextmanager
 import uvicorn
 import json
 
-# --- CONFIGURATION ---
+# ============================================
+# CONFIGURATION
+# ============================================
 API_ID = 38520540
 API_HASH = '083c83a60885eb385e09cce1376bb0cf'
 TARGET_BOT = '@Nick_Bypass_Bot'
+TIMEOUT = 10  # ⬅️ 10 seconds timeout
 
-# --- DATABASE ---
+# ============================================
+# DATABASE
+# ============================================
 class Database:
     def __init__(self, db_file='bypass.db'):
         self.db_file = db_file
@@ -30,6 +35,7 @@ class Database:
         conn = self.get_connection()
         cursor = conn.cursor()
         
+        # Links table - temporary storage only
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS links (
                 id TEXT PRIMARY KEY,
@@ -38,11 +44,11 @@ class Database:
                 status TEXT DEFAULT 'pending',
                 created_at TIMESTAMP,
                 expires_at TIMESTAMP,
-                request_ip TEXT,
-                user_id TEXT DEFAULT 'anonymous'
+                request_ip TEXT
             )
         ''')
         
+        # Userbot session storage
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS session (
                 id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -54,6 +60,7 @@ class Database:
         ''')
         cursor.execute('INSERT OR IGNORE INTO session (id) VALUES (1)')
         
+        # Stats
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS stats (
                 id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -64,6 +71,7 @@ class Database:
         ''')
         cursor.execute('INSERT OR IGNORE INTO stats (id) VALUES (1)')
         
+        # OTP sessions for login
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS otp_sessions (
                 session_id TEXT PRIMARY KEY,
@@ -78,14 +86,15 @@ class Database:
         conn.commit()
         conn.close()
     
-    def save_link(self, link_id, original_link, request_ip, user_id='anonymous'):
+    def save_link(self, link_id, original_link, request_ip):
+        """Save link temporarily - expires in 10 minutes"""
         conn = self.get_connection()
         cursor = conn.cursor()
         expires_at = datetime.now() + timedelta(minutes=10)
         cursor.execute('''
-            INSERT INTO links (id, original_link, created_at, expires_at, request_ip, user_id)
-            VALUES (?, ?, ?, ?, ?, ?)
-        ''', (link_id, original_link, datetime.now(), expires_at, request_ip, user_id))
+            INSERT INTO links (id, original_link, created_at, expires_at, request_ip)
+            VALUES (?, ?, ?, ?, ?)
+        ''', (link_id, original_link, datetime.now(), expires_at, request_ip))
         conn.commit()
         conn.close()
     
@@ -99,13 +108,14 @@ class Database:
         conn.commit()
         conn.close()
     
-    def get_link(self, link_id):
+    def delete_link_instant(self, link_id):
+        """⬅️ INSTANT DELETE - Immediately remove link from database"""
         conn = self.get_connection()
         cursor = conn.cursor()
-        cursor.execute('SELECT * FROM links WHERE id = ?', (link_id,))
-        result = cursor.fetchone()
+        cursor.execute('DELETE FROM links WHERE id = ?', (link_id,))
+        conn.commit()
         conn.close()
-        return result
+        print(f"🗑️ Instant deleted link: {link_id}")
     
     def save_session(self, session_string, phone_number):
         conn = self.get_connection()
@@ -206,16 +216,19 @@ class Database:
         conn.commit()
         conn.close()
 
-# --- FastAPI App ---
+# ============================================
+# INITIALIZE
+# ============================================
 app = FastAPI(title="Semy Bypass API")
 db = Database()
 
-# --- Userbot Client ---
 user_client = None
 active_requests = {}
 login_clients = {}
 
-# --- Helper Functions ---
+# ============================================
+# HELPER FUNCTIONS
+# ============================================
 def generate_link_id():
     return secrets.token_urlsafe(12)
 
@@ -244,88 +257,104 @@ def is_valid_url(link):
     return bool(re.match(r'^https?://[a-zA-Z0-9][a-zA-Z0-9-]*\.[a-zA-Z]{2,}(/.*)?$', link))
 
 def compare_links(link1, link2):
-    """Compare two links ignoring protocol, www, and trailing slashes"""
+    """Compare two links - ignore protocol, www, trailing slashes, query params"""
     if not link1 or not link2:
         return False
     
-    # Clean both links
-    link1 = re.sub(r'^https?://', '', link1.lower())
-    link2 = re.sub(r'^https?://', '', link2.lower())
-    link1 = re.sub(r'^www\.', '', link1)
-    link2 = re.sub(r'^www\.', '', link2)
-    link1 = link1.rstrip('/')
-    link2 = link2.rstrip('/')
+    def clean(url):
+        url = url.lower()
+        url = re.sub(r'^https?://', '', url)
+        url = re.sub(r'^www\.', '', url)
+        url = url.rstrip('/')
+        url = re.sub(r'\?.*$', '', url)
+        return url
     
-    return link1 == link2
+    return clean(link1) == clean(link2)
 
-# --- Userbot Handler with Original Link Matching ---
+# ============================================
+# USERBOT HANDLER - SIMPLE LOGIC
+# ============================================
 def setup_userbot_handler(client):
-    """Setup the message handler for userbot"""
+    """Setup the message handler for userbot - Simple Logic"""
     
     @client.on(events.NewMessage(from_users=TARGET_BOT))
     async def bypass_response_handler(event):
         response_text = event.text
         response_text = filter_bot_name(response_text)
         
-        print(f"📨 Response received: {response_text[:100]}...")
+        print(f"\n{'='*50}")
+        print(f"📨 RESPONSE RECEIVED")
+        print(f"{'='*50}")
+        print(f"{response_text[:300]}...")
         
-        # Extract Original Link from response
-        original_match = re.search(r'Original Link :?\s*"?\s*([^\s"\n]+)', response_text, re.IGNORECASE)
-        if not original_match:
-            print("❌ No original link found in response")
+        # ===== STEP 1: Sab URLs nikaalo response se =====
+        all_urls = re.findall(r'https?://[^\s"\'\n]+', response_text)
+        
+        if len(all_urls) < 2:
+            print(f"❌ Kam se kam 2 URLs chahiye, mile: {len(all_urls)}")
             return
         
-        response_original = original_match.group(1).strip()
-        print(f"🔗 Response original link: {response_original}")
+        # ===== STEP 2: Pehla URL = Original Link =====
+        response_original = all_urls[0]
+        print(f"\n🔗 Original from response: {response_original}")
         
-        # Extract Bypass Link from response
-        bypass_match = re.search(r'Bypassed Link :?\s*"?\s*([^\s"\n]+)', response_text, re.IGNORECASE)
-        if not bypass_match:
-            print("❌ No bypass link found in response")
+        # ===== STEP 3: Doosra URL = Bypass Link =====
+        bypass_url = all_urls[1]
+        print(f"✅ Bypass from response: {bypass_url}")
+        
+        # ===== STEP 4: Check karo ki bypass valid hai =====
+        invalid_keywords = ['not found', 'expired', 'deleted', 'invalid', 'error']
+        if any(kw in bypass_url.lower() for kw in invalid_keywords):
+            print("❌ Bypass link invalid (expired/deleted)")
             return
         
-        bypass_url = bypass_match.group(1).strip()
-        print(f"✅ Bypass link: {bypass_url}")
-        
-        # Check if bypass link is valid (not expired/deleted message)
-        if any(keyword in bypass_url.lower() for keyword in ['not found', 'expired', 'deleted']):
-            print("❌ Bypass link is invalid (expired/deleted)")
-            return
-        
-        # Match with pending requests using BOTH original link and timestamp
+        # ===== STEP 5: Match with pending request =====
         matched = False
         for link_id, request_data in list(active_requests.items()):
-            if not request_data.get('future') or request_data.get('matched'):
+            if request_data.get('matched'):
                 continue
                 
             stored_link = request_data.get('original_link', '')
             
-            # Compare links
             if compare_links(stored_link, response_original):
-                print(f"✅ Matched! Link ID: {link_id}")
+                print(f"\n{'='*50}")
+                print(f"✅ MATCH FOUND!")
+                print(f"{'='*50}")
+                print(f"   Link ID: {link_id}")
+                print(f"   Stored: {stored_link}")
+                print(f"   Response: {response_original}")
+                print(f"   Bypass: {bypass_url}")
+                
                 request_data['matched'] = True
                 request_data['future'].set_result({
                     'text': response_text,
                     'bypass_url': bypass_url,
                     'original_link': response_original
                 })
+                
                 db.update_link(link_id, bypass_url, 'success')
                 db.increment_stats('success')
+                
+                # ⬅️ INSTANT DELETE after success
+                db.delete_link_instant(link_id)
+                
                 matched = True
                 break
         
         if not matched:
-            print(f"❌ No pending request found for link: {response_original}")
-            print(f"📋 Active requests: {list(active_requests.keys())}")
+            print(f"\n❌ No pending request for: {response_original}")
+            print(f"   Active requests: {list(active_requests.keys())}")
 
-# --- API Endpoints ---
+# ============================================
+# API ENDPOINTS
+# ============================================
 
 @app.get("/")
 async def root():
     return {
         "name": "Semy Bypass API",
         "version": "2.0",
-        "description": "Multi-user bypass API with proper request matching",
+        "description": "10 second timeout, instant delete after response",
         "endpoints": {
             "/bypass?url=LINK": "Bypass a shortened URL",
             "/admin": "Admin panel - Login with Telegram",
@@ -335,7 +364,7 @@ async def root():
 
 @app.get("/bypass")
 async def bypass_url(url: str, request: Request):
-    """Bypass a shortened URL - Supports multiple concurrent requests"""
+    """Bypass a shortened URL - 10 second timeout, instant delete"""
     global user_client
     
     if not url:
@@ -360,58 +389,70 @@ async def bypass_url(url: str, request: Request):
     link_id = generate_link_id()
     client_ip = request.client.host if request.client else "unknown"
     
-    # Save link with original URL
+    # Save link temporarily
     db.save_link(link_id, url, client_ip)
     
-    # Create unique future for this request
+    # Create future for this request
     loop = asyncio.get_event_loop()
     future = loop.create_future()
     
-    # Store request with original link for matching
+    # Store request with original link
     active_requests[link_id] = {
         'timestamp': time.time(),
         'future': future,
         'matched': False,
-        'original_link': formatted,  # Store formatted link for matching
-        'raw_link': url              # Store raw link for response
+        'original_link': formatted
     }
     
     try:
+        print(f"\n{'='*50}")
+        print(f"📤 NEW REQUEST")
+        print(f"{'='*50}")
+        print(f"   Link ID: {link_id}")
+        print(f"   Original: {formatted}")
+        print(f"   Timeout: {TIMEOUT} seconds")
+        
         # Send to target bot
-        print(f"📤 Sending to bot: {formatted} (ID: {link_id})")
         await user_client.send_message(TARGET_BOT, formatted)
         
-        # Wait for response (13 seconds)
+        # Wait for response (10 seconds) ⬅️ TIMEOUT = 10
         try:
-            response = await asyncio.wait_for(future, timeout=13)
+            response = await asyncio.wait_for(future, timeout=TIMEOUT)
             if response and response.get('bypass_url'):
                 bypassed = response['bypass_url']
                 if not is_blocked_link(bypassed):
+                    # ⬅️ INSTANT DELETE after success response
+                    db.delete_link_instant(link_id)
                     return {
                         "success": True,
                         "link_id": link_id,
                         "original_url": url,
-                        "bypassed_url": bypassed,
-                        "message": "Link bypassed successfully"
+                        "bypassed_url": bypassed
                     }
         except asyncio.TimeoutError:
-            print(f"⏰ Timeout for link: {formatted} (ID: {link_id})")
+            print(f"⏰ TIMEOUT! {TIMEOUT} seconds passed for: {formatted}")
+            # ⬅️ INSTANT DELETE on timeout
+            db.delete_link_instant(link_id)
         
         # Failed
         db.update_link(link_id, None, 'failed')
         db.increment_stats('failed')
+        # ⬅️ INSTANT DELETE on failure
+        db.delete_link_instant(link_id)
         return {
             "success": False,
             "link_id": link_id,
             "original_url": url,
             "status": "failed",
-            "message": "Could not bypass the link or link expired"
+            "message": f"Could not bypass the link (timeout: {TIMEOUT}s)"
         }
         
     except Exception as e:
         print(f"❌ Error: {e}")
         db.update_link(link_id, None, 'error')
         db.increment_stats('failed')
+        # ⬅️ INSTANT DELETE on error
+        db.delete_link_instant(link_id)
         return {
             "success": False,
             "link_id": link_id,
@@ -420,7 +461,6 @@ async def bypass_url(url: str, request: Request):
             "message": str(e)
         }
     finally:
-        # Cleanup
         if link_id in active_requests:
             del active_requests[link_id]
 
@@ -434,10 +474,14 @@ async def stats():
         "failed_bypass": failed,
         "success_rate": f"{(success/total*100):.2f}%" if total > 0 else "0%",
         "userbot_status": "online" if connected else "offline",
-        "active_requests": len(active_requests)
+        "active_requests": len(active_requests),
+        "timeout": f"{TIMEOUT} seconds"
     }
 
-# --- Admin Panel (HTML) ---
+# ============================================
+# ADMIN PANEL (SAME AS BEFORE)
+# ============================================
+
 @app.get("/admin", response_class=HTMLResponse)
 async def admin_panel():
     """Admin panel with Telegram login"""
@@ -466,18 +510,8 @@ async def admin_panel():
                 max-width: 450px;
                 width: 100%;
             }
-            h1 {
-                text-align: center;
-                color: #333;
-                font-size: 28px;
-                margin-bottom: 5px;
-            }
-            .subtitle {
-                text-align: center;
-                color: #888;
-                margin-bottom: 30px;
-                font-size: 14px;
-            }
+            h1 { text-align: center; color: #333; font-size: 28px; margin-bottom: 5px; }
+            .subtitle { text-align: center; color: #888; margin-bottom: 30px; font-size: 14px; }
             .status-box {
                 background: #f8f9fa;
                 padding: 15px;
@@ -494,15 +528,8 @@ async def admin_panel():
             }
             .online { background: #d4edda; color: #155724; }
             .offline { background: #f8d7da; color: #721c24; }
-            .form-group {
-                margin-bottom: 20px;
-            }
-            label {
-                display: block;
-                margin-bottom: 8px;
-                color: #555;
-                font-weight: 600;
-            }
+            .form-group { margin-bottom: 20px; }
+            label { display: block; margin-bottom: 8px; color: #555; font-weight: 600; }
             input {
                 width: 100%;
                 padding: 12px 15px;
@@ -511,10 +538,7 @@ async def admin_panel():
                 font-size: 16px;
                 transition: border-color 0.3s;
             }
-            input:focus {
-                outline: none;
-                border-color: #667eea;
-            }
+            input:focus { outline: none; border-color: #667eea; }
             button {
                 width: 100%;
                 padding: 14px;
@@ -528,43 +552,20 @@ async def admin_panel():
                 transition: transform 0.2s;
             }
             button:hover { transform: scale(1.02); }
-            button:active { transform: scale(0.98); }
-            button:disabled {
-                opacity: 0.6;
-                cursor: not-allowed;
-            }
-            .btn-danger {
-                background: #dc3545;
-            }
+            button:disabled { opacity: 0.6; cursor: not-allowed; }
+            .btn-danger { background: #dc3545; }
             .btn-danger:hover { background: #c82333; }
-            .btn-success {
-                background: #28a745;
-            }
-            .btn-success:hover { background: #218838; }
+            .btn-secondary { background: #6c757d; }
+            .btn-secondary:hover { background: #5a6268; }
             .message {
                 padding: 12px;
                 border-radius: 8px;
                 margin-bottom: 15px;
                 display: none;
             }
-            .success { 
-                background: #d4edda; 
-                color: #155724; 
-                display: block; 
-            }
-            .error { 
-                background: #f8d7da; 
-                color: #721c24; 
-                display: block; 
-            }
-            .info {
-                background: #d1ecf1;
-                color: #0c5460;
-                padding: 12px;
-                border-radius: 8px;
-                margin-bottom: 15px;
-                display: none;
-            }
+            .success { background: #d4edda; color: #155724; display: block; }
+            .error { background: #f8d7da; color: #721c24; display: block; }
+            .info { background: #d1ecf1; color: #0c5460; display: block; }
             .step {
                 background: #f0f0ff;
                 padding: 15px;
@@ -572,34 +573,35 @@ async def admin_panel():
                 margin-bottom: 15px;
                 border-left: 4px solid #667eea;
             }
-            .step-title {
-                font-weight: 600;
-                color: #333;
-                margin-bottom: 5px;
-            }
-            .step-desc {
-                color: #666;
-                font-size: 14px;
-            }
-            #otpSection, #passwordSection {
-                display: none;
-            }
-            .footer {
-                text-align: center;
-                margin-top: 20px;
-                font-size: 13px;
-                color: #aaa;
-            }
-            .footer a {
-                color: #667eea;
-                text-decoration: none;
-            }
+            .step-title { font-weight: 600; color: #333; margin-bottom: 5px; }
+            .step-desc { color: #666; font-size: 14px; }
+            .section { display: none; }
+            .section.active { display: block; }
+            .footer { text-align: center; margin-top: 20px; font-size: 13px; color: #aaa; }
+            .footer a { color: #667eea; text-decoration: none; }
             .phone-display {
                 background: #e9ecef;
                 padding: 8px 12px;
                 border-radius: 6px;
                 font-family: monospace;
                 font-size: 14px;
+            }
+            .active-requests {
+                margin-top: 15px;
+                padding: 10px;
+                background: #f8f9fa;
+                border-radius: 8px;
+                font-size: 13px;
+                color: #666;
+            }
+            .timeout-info {
+                margin-top: 10px;
+                padding: 8px;
+                background: #fff3cd;
+                border-radius: 6px;
+                font-size: 13px;
+                color: #856404;
+                text-align: center;
             }
         </style>
     </head>
@@ -615,10 +617,9 @@ async def admin_panel():
             </div>
             
             <div id="message" class="message"></div>
-            <div id="infoBox" class="info"></div>
             
             <!-- Login Section -->
-            <div id="loginSection">
+            <div id="loginSection" class="section active">
                 <div class="step">
                     <div class="step-title">📱 Login to Telegram</div>
                     <div class="step-desc">Enter your phone number to receive OTP</div>
@@ -633,7 +634,7 @@ async def admin_panel():
             </div>
             
             <!-- OTP Section -->
-            <div id="otpSection">
+            <div id="otpSection" class="section">
                 <div class="step">
                     <div class="step-title">🔑 Enter OTP</div>
                     <div class="step-desc">OTP sent to <span id="otpPhoneDisplay" class="phone-display"></span></div>
@@ -646,11 +647,13 @@ async def admin_panel():
                 
                 <button id="verifyOtpBtn" onclick="verifyOTP()">✅ Verify OTP</button>
                 <br><br>
-                <button onclick="resendOTP()" style="background: #6c757d;">🔄 Resend OTP</button>
+                <button onclick="resendOTP()" class="btn-secondary">🔄 Resend OTP</button>
+                <br><br>
+                <button onclick="goBack()" class="btn-secondary">⬅️ Go Back</button>
             </div>
             
-            <!-- Password Section (if 2FA enabled) -->
-            <div id="passwordSection">
+            <!-- Password Section -->
+            <div id="passwordSection" class="section">
                 <div class="step">
                     <div class="step-title">🔐 2FA Password Required</div>
                     <div class="step-desc">Enter your Telegram 2-factor authentication password</div>
@@ -662,11 +665,26 @@ async def admin_panel():
                 </div>
                 
                 <button onclick="verifyPassword()">🔓 Verify Password</button>
+                <br><br>
+                <button onclick="goBackOtp()" class="btn-secondary">⬅️ Go Back</button>
             </div>
             
-            <!-- Userbot Controls -->
+            <!-- User Controls -->
             <div id="userbotControls" style="display:none; margin-top:20px;">
+                <div class="step" style="border-color: #28a745;">
+                    <div class="step-title">✅ Logged In</div>
+                    <div class="step-desc">Userbot is active and ready</div>
+                </div>
+                
                 <button onclick="logoutUserbot()" class="btn-danger">🚪 Logout</button>
+                
+                <div class="active-requests">
+                    <strong>🔄 Active Requests:</strong> <span id="activeCount">0</span>
+                </div>
+                
+                <div class="timeout-info">
+                    ⏱️ Timeout: 10 seconds | Links deleted instantly after response
+                </div>
             </div>
             
             <div style="margin-top: 20px; padding: 15px; background: #f8f9fa; border-radius: 10px;">
@@ -682,18 +700,36 @@ async def admin_panel():
             </div>
             
             <div class="footer">
-                <p>Powered by Semy Bypass API v1.0</p>
+                <p>Powered by Semy Bypass API v2.0 | Timeout: 10s | Instant Delete</p>
             </div>
         </div>
         
         <script>
             let loginSessionId = null;
             let currentPhone = null;
+            let currentSection = 'login';
             
-            // Check status on load
             window.onload = function() {
                 checkStatus();
+                setInterval(checkStatus, 5000);
             };
+            
+            function showSection(section) {
+                document.querySelectorAll('.section').forEach(el => {
+                    el.classList.remove('active');
+                });
+                
+                const sectionMap = {
+                    'login': 'loginSection',
+                    'otp': 'otpSection',
+                    'password': 'passwordSection'
+                };
+                
+                if (sectionMap[section]) {
+                    document.getElementById(sectionMap[section]).classList.add('active');
+                }
+                currentSection = section;
+            }
             
             async function checkStatus() {
                 try {
@@ -702,6 +738,8 @@ async def admin_panel():
                     
                     const badge = document.getElementById('statusBadge');
                     const phoneDisplay = document.getElementById('phoneDisplay');
+                    const userbotControls = document.getElementById('userbotControls');
+                    const activeCount = document.getElementById('activeCount');
                     
                     if (data.connected) {
                         badge.className = 'status-badge online';
@@ -710,19 +748,23 @@ async def admin_panel():
                             phoneDisplay.style.display = 'inline';
                             phoneDisplay.textContent = '📱 ' + data.phone;
                         }
-                        document.getElementById('loginSection').style.display = 'none';
-                        document.getElementById('userbotControls').style.display = 'block';
+                        userbotControls.style.display = 'block';
+                        document.querySelectorAll('.section').forEach(el => {
+                            el.classList.remove('active');
+                        });
                     } else {
                         badge.className = 'status-badge offline';
                         badge.textContent = '● Offline';
                         phoneDisplay.style.display = 'none';
-                        document.getElementById('loginSection').style.display = 'block';
-                        document.getElementById('userbotControls').style.display = 'none';
-                        document.getElementById('otpSection').style.display = 'none';
-                        document.getElementById('passwordSection').style.display = 'none';
+                        userbotControls.style.display = 'none';
+                        showSection(currentSection);
+                    }
+                    
+                    if (data.active_requests !== undefined) {
+                        activeCount.textContent = data.active_requests;
                     }
                 } catch (error) {
-                    console.error('Error checking status');
+                    console.error('Error checking status:', error);
                 }
             }
             
@@ -737,7 +779,6 @@ async def admin_panel():
                 const btn = document.getElementById('sendOtpBtn');
                 btn.disabled = true;
                 btn.textContent = '⏳ Sending...';
-                
                 hideMessages();
                 
                 try {
@@ -752,12 +793,10 @@ async def admin_panel():
                     if (data.success) {
                         loginSessionId = data.session_id;
                         currentPhone = phone;
-                        
                         document.getElementById('otpPhoneDisplay').textContent = phone;
-                        document.getElementById('otpSection').style.display = 'block';
                         document.getElementById('otpInput').value = '';
+                        showSection('otp');
                         document.getElementById('otpInput').focus();
-                        
                         showMessage('✅ OTP sent to your Telegram!', 'success');
                     } else {
                         showMessage('❌ ' + data.message, 'error');
@@ -786,7 +825,6 @@ async def admin_panel():
                 const btn = document.getElementById('verifyOtpBtn');
                 btn.disabled = true;
                 btn.textContent = '⏳ Verifying...';
-                
                 hideMessages();
                 
                 try {
@@ -803,12 +841,16 @@ async def admin_panel():
                     
                     if (data.success) {
                         if (data.requires_password) {
-                            document.getElementById('passwordSection').style.display = 'block';
-                            document.getElementById('otpSection').style.display = 'none';
+                            showSection('password');
+                            document.getElementById('passwordInput').value = '';
+                            document.getElementById('passwordInput').focus();
                             showMessage('🔐 Enter your 2FA password', 'info');
                         } else {
                             showMessage('✅ Login successful!', 'success');
-                            setTimeout(() => checkStatus(), 1000);
+                            setTimeout(() => {
+                                checkStatus();
+                                showSection('login');
+                            }, 1000);
                         }
                     } else {
                         showMessage('❌ ' + data.message, 'error');
@@ -837,7 +879,6 @@ async def admin_panel():
                 const btn = event.target;
                 btn.disabled = true;
                 btn.textContent = '⏳ Verifying...';
-                
                 hideMessages();
                 
                 try {
@@ -854,7 +895,10 @@ async def admin_panel():
                     
                     if (data.success) {
                         showMessage('✅ Login successful!', 'success');
-                        setTimeout(() => checkStatus(), 1000);
+                        setTimeout(() => {
+                            checkStatus();
+                            showSection('login');
+                        }, 1000);
                     } else {
                         showMessage('❌ ' + data.message, 'error');
                     }
@@ -866,14 +910,27 @@ async def admin_panel():
                 }
             }
             
-            async function resendOTP() {
+            function resendOTP() {
                 if (!currentPhone) {
                     showMessage('Please enter phone number again', 'error');
                     return;
                 }
-                
-                document.getElementById('otpSection').style.display = 'none';
-                document.getElementById('sendOtpBtn').click();
+                showSection('login');
+                setTimeout(() => {
+                    document.getElementById('sendOtpBtn').click();
+                }, 500);
+            }
+            
+            function goBack() {
+                showSection('login');
+                document.getElementById('phoneInput').value = currentPhone || '+91';
+                hideMessages();
+            }
+            
+            function goBackOtp() {
+                showSection('otp');
+                document.getElementById('otpInput').focus();
+                hideMessages();
             }
             
             async function logoutUserbot() {
@@ -890,7 +947,10 @@ async def admin_panel():
                     
                     if (data.success) {
                         showMessage('✅ Logged out successfully', 'success');
-                        setTimeout(() => checkStatus(), 1000);
+                        setTimeout(() => {
+                            checkStatus();
+                            showSection('login');
+                        }, 1000);
                     } else {
                         showMessage('❌ ' + data.message, 'error');
                     }
@@ -901,11 +961,9 @@ async def admin_panel():
             
             function showMessage(msg, type) {
                 const div = document.getElementById('message');
-                const info = document.getElementById('infoBox');
                 div.textContent = msg;
                 div.className = 'message ' + type;
                 div.style.display = 'block';
-                info.style.display = 'none';
                 setTimeout(() => {
                     div.style.display = 'none';
                 }, 6000);
@@ -913,7 +971,6 @@ async def admin_panel():
             
             function hideMessages() {
                 document.getElementById('message').style.display = 'none';
-                document.getElementById('infoBox').style.display = 'none';
             }
             
             // Enter key support
@@ -932,10 +989,9 @@ async def admin_panel():
     """
     return html
 
-# --- Admin Login Endpoints ---
-
-# Store login clients
-login_clients = {}
+# ============================================
+# ADMIN API ENDPOINTS
+# ============================================
 
 @app.post("/admin/login/send-otp")
 async def send_otp(request: Request):
@@ -1001,8 +1057,6 @@ async def verify_otp(request: Request):
             
             global user_client
             user_client = client
-            
-            # Setup handler
             setup_userbot_handler(user_client)
             
             if session_id in login_clients:
@@ -1055,8 +1109,6 @@ async def verify_password(request: Request):
             
             global user_client
             user_client = client
-            
-            # Setup handler
             setup_userbot_handler(user_client)
             
             if session_id in login_clients:
@@ -1103,20 +1155,27 @@ async def admin_status():
         "active_requests": len(active_requests)
     }
 
-# --- Cleanup Loop ---
+# ============================================
+# CLEANUP LOOP
+# ============================================
 async def cleanup_loop():
     while True:
-        await asyncio.sleep(300)
+        await asyncio.sleep(300)  # 5 minutes
         db.cleanup_expired()
         print("🧹 Cleaned expired links and sessions")
 
-# --- Lifespan ---
+# ============================================
+# LIFESPAN
+# ============================================
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global user_client
     
-    print("🚀 Starting Semy Bypass API v2.0...")
-    print("📊 Multi-user support with proper request matching")
+    print("\n" + "="*50)
+    print("🚀 STARTING SEMY BYPASS API v2.0")
+    print("="*50)
+    print(f"⏱️ Timeout: {TIMEOUT} seconds")
+    print("🗑️ Instant delete after response/timeout")
     
     # Try to restore session
     session_data = db.get_session()
@@ -1135,12 +1194,14 @@ async def lifespan(app: FastAPI):
     
     yield
     
-    print("🛑 Shutting down...")
+    print("\n🛑 Shutting down...")
     if user_client and user_client.is_connected():
         await user_client.disconnect()
 
 app.router.lifespan_context = lifespan
 
-# --- Run ---
+# ============================================
+# RUN
+# ============================================
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
